@@ -1,0 +1,44 @@
+{
+  "_comment": "Paper-scale reference configuration (arXiv:2606.09186 Sec. 3-4): Qwen3-Omni-scale Thinker, Mimi codec, 480 ms slices, paper LRs. Not runnable in this repository - documents the target hyperparameters.",
+  "model": {
+    "thinker": {
+      "vocab_size": 151936,
+      "d_model": 3584,
+      "n_heads": 28,
+      "n_layers": 28,
+      "max_positions": 32768,
+      "dropout": 0.0
+    },
+    "talker": {
+      "d_model": 1024,
+      "n_heads": 16,
+      "n_layers": 12,
+      "dropout": 0.0
+    },
+    "conditioning_dim": 1024,
+    "code2wav_upsample": 4
+  },
+  "training": {
+    "thinker_lr": 1e-05,
+    "talker_lr": 0.0001,
+    "batch_size": 128,
+    "loss_weight_thinker": 1.0,
+    "loss_weight_talker": 1.0,
+    "max_steps": 50000,
+    "log_every": 100
+  },
+  "runtime": {
+    "slice_ms": 480,
+    "target_rtf": 1.0,
+    "vad_threshold": 0.02,
+    "vad_hangover_ms": 320,
+    "thinking_budget_s": 8.0,
+    "codec": {
+      "frame_rate_hz": 12.5,
+      "num_codebooks": 8,
+      "codebook_size": 2048,
+      "frames_per_slice": 6
+    }
+  },
+  "seed": 1234
+}

@@ -1,0 +1,43 @@
+{
+  "model": {
+    "thinker": {
+      "vocab_size": 512,
+      "d_model": 32,
+      "n_heads": 4,
+      "n_layers": 2,
+      "max_positions": 4096,
+      "dropout": 0.0
+    },
+    "talker": {
+      "d_model": 32,
+      "n_heads": 4,
+      "n_layers": 2,
+      "dropout": 0.0
+    },
+    "conditioning_dim": 32,
+    "code2wav_upsample": 4
+  },
+  "training": {
+    "thinker_lr": 0.0003,
+    "talker_lr": 0.001,
+    "batch_size": 4,
+    "loss_weight_thinker": 1.0,
+    "loss_weight_talker": 1.0,
+    "max_steps": 50,
+    "log_every": 5
+  },
+  "runtime": {
+    "slice_ms": 480,
+    "target_rtf": 1.0,
+    "vad_threshold": 0.02,
+    "vad_hangover_ms": 320,
+    "thinking_budget_s": 8.0,
+    "codec": {
+      "frame_rate_hz": 12.5,
+      "num_codebooks": 8,
+      "codebook_size": 2048,
+      "frames_per_slice": 6
+    }
+  },
+  "seed": 1234
+}
