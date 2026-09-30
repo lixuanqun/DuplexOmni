@@ -71,7 +71,10 @@ python -m duplexomni check data/processed/train.jsonl
 python -m duplexomni train --config configs/tiny.json \
     --data data/processed/train.jsonl --steps 30
 
-# 4) websocket demo (minimal RFC 6455 server + simulated-mic client)
+# 4) behavioural benchmark + thinking-layer ablation (paper Sec. 5)
+python -m duplexomni bench --ablation
+
+# 5) websocket demo (minimal RFC 6455 server + simulated-mic client)
 python examples/websocket_demo.py --serve --port 8765 &
 python examples/websocket_demo.py --client --port 8765 --wav outputs/ws.wav
 ```
@@ -109,10 +112,14 @@ duplexomni/
 │   ├── bridge.py          [THINK]/<...>/[WAIT] async collaboration
 │   ├── interaction.py     the 480 ms slice loop (barge-in, overlap, muting)
 │   ├── vad.py / metrics.py / session.py / events.py
+├── eval/                behavioural benchmark (paper Sec. 5)
+│   ├── scenarios.py       scripted Full-DuplexBench-style cases
+│   ├── harness.py         runner + per-category scores (RTF budget enforced)
+│   └── ablation.py        none/weak/strong thinking-layer ablation
 ├── demo.py              offline full-duplex simulation
 └── cli.py               `python -m duplexomni ...`
-tests/                   65 unit/integration tests (grammar, pipeline, model,
-                         caches, training, runtime)
+tests/                   70 unit/integration tests (grammar, pipeline, model,
+                         caches, training, runtime, benchmark)
 ```
 
 ## Paper → code mapping
@@ -130,6 +137,42 @@ tests/                   65 unit/integration tests (grammar, pipeline, model,
 | non-blocking thinking request with dialogue/video/task context | `runtime/bridge.py`, `runtime/thinking.py` |
 | progressive fragment injection, halt on condition change | `runtime/bridge.py::take_pending/halt` |
 | RTF < 1 target | `runtime/metrics.py` |
+
+## Evaluation
+
+`duplexomni/eval/` mirrors the paper's evaluation *methodology* at the
+systems level (the bundled model is untrained, so language quality is out of
+scope — behaviour and timing are not):
+
+```text
+$ python -m duplexomni bench --ablation
+full-duplex behavioural benchmark
+================================================================
+[PASS] floor-discipline     cat=interruption       frag=0   max_rtf=0.11
+[PASS] turn-taking          cat=turn_taking        frag=0   max_rtf=0.07
+[PASS] thinking-delivery    cat=delayed_reasoning  frag=3   max_rtf=0.17
+[PASS] thinking-abort       cat=interruption_reset frag=0   max_rtf=0.20
+----------------------------------------------------------------
+interruption             100%
+turn_taking              100%
+delayed_reasoning        100%
+interruption_reset       100%
+OVERALL                  100%
+
+thinking-layer ablation (paper Sec. 5)
+================================================================
+variant      policy score   fragments   max_rtf
+none                100%           0      0.19
+weak                100%           1      0.19
+strong              100%           6      0.16
+----------------------------------------------------------------
+policy independent of thinking layer: True
+fragment volume scales with layer strength: True
+```
+
+The ablation reproduces the paper's systems-level finding: swapping the
+thinking layer (none / weak / strong) leaves the full-duplex *behavioural*
+score unchanged while delivered fragment volume scales with layer strength.
 
 ## Testing
 

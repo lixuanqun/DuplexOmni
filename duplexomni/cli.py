@@ -103,6 +103,26 @@ def _cmd_serve(args) -> int:
     return 2
 
 
+def _cmd_bench(args) -> int:
+    import torch
+
+    from .config import tiny_config
+    from .eval import format_report, run_benchmark
+    from .model import DuplexOmni
+
+    torch.manual_seed(args.seed)
+    model = DuplexOmni(tiny_config())
+    report = run_benchmark(model, seed=args.seed)
+    print(format_report(report))
+    if args.ablation:
+        from .eval import format_ablation, run_thinking_ablation
+
+        print()
+        result = run_thinking_ablation(model, seed=args.seed)
+        print(format_ablation(result))
+    return 0 if report.overall == 1.0 else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="duplexomni",
@@ -133,6 +153,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--wav", default=None, help="write mixed session audio here")
     p.set_defaults(func=_cmd_demo)
+
+    p = sub.add_parser("bench", help="run the full-duplex behavioural benchmark")
+    p.add_argument("--ablation", action="store_true", help="also run the thinking-layer ablation")
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=_cmd_bench)
 
     p = sub.add_parser("serve", help="websocket demo server (see examples/)")
     p.add_argument("--port", type=int, default=8765)

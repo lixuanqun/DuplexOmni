@@ -202,6 +202,7 @@ class InteractionLayer:
                 not loop.assistant_turn_open
                 and not loop.muted
                 and loop.silence_budget_s <= 0
+                and not user_speaking  # never open a turn over an active user
                 and (new_context or slices_since_context >= self.assistant_initiative_after)
             ):
                 loop.assistant_turn_open = True
