@@ -58,9 +58,14 @@ class Code2Wav(nn.Module):
         return y.squeeze(1)
 
     def to_pcm16(self, waveform) -> bytes:
-        """Convert a (F * frame_samples,) float tensor to 16-bit mono PCM."""
-        import numpy as np
+        """Convert a (F * frame_samples,) float tensor to 16-bit mono PCM.
 
-        arr = waveform.detach().cpu().numpy().astype(np.float64)
-        arr = np.clip(arr, -1.0, 1.0)
-        return (arr * 32767.0).astype("<i2").tobytes()
+        Pure torch + stdlib (numpy is deliberately not required here).
+        """
+        import array
+
+        samples = (
+            waveform.detach().cpu().clamp(-1.0, 1.0).mul_(32767.0).round_()
+            .to(torch.int16).flatten().tolist()
+        )
+        return array.array("h", samples).tobytes()
