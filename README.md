@@ -2,7 +2,7 @@
 
 # DuplexOmni
 
-**Engineering reference implementation of full-duplex voice interaction with a decoupled interaction/thinking architecture**
+**Full-duplex voice agent: barge-in, task delegation, and async thinking, with a runnable browser gateway**
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -14,6 +14,8 @@
 *Reference implementation of
 ["DuplexOmni: Real-Time Listening, Seeing, Thinking, and Speaking for Full-Duplex Interaction"](https://arxiv.org/abs/2606.09186)
 (Huang et al., 2026 — Xi'an Jiaotong University, Peking University, Meituan).*
+
+**Keywords:** full-duplex speech, realtime voice assistant, voice agent, barge-in, turn-taking, streaming ASR, streaming TTS, spoken dialogue, task delegation, tool use, Thinker-Talker, WebSocket, duplex conversation
 
 </div>
 
@@ -27,6 +29,8 @@ DuplexOmni is a full-duplex spoken-dialogue architecture: the model **listens, s
 - a **thinking layer** — a pluggable LLM/agent that handles deep reasoning and tool use, dispatched non-blocking via `[THINK]` and streaming its result back as `<...>` fragments while the interaction layer keeps talking.
 
 This repository is a **faithful, tested, fully runnable engineering rendition** of that method: the control-token grammar, the Writer–Director data pipeline, the Thinker–Talker-MTP model with alternating optimisation and KV-cached time-sliced inference, the async interaction/thinking runtime, and a behavioural benchmark with the paper's thinking-layer ablation.
+
+You can also run it as a **voice agent** today: `python -m duplexomni serve` opens a browser session that keeps listening while it speaks, cuts playback on barge-in, delegates work (calculate, clock, memory) to a background worker, and streams the result back into the conversation. ASR and TTS are replaceable streaming engines. No GPU and no model weights are required for the default path.
 
 **Paper results this architecture achieves** (DuplexBench v1.5 ToR / latency):
 
@@ -76,6 +80,7 @@ The two layers collaborate through a small control-token grammar (paper Appendix
 - **Thinker–Talker-MTP model** (`duplexomni/model/`) — conditioning `c = f_text(e)+f_hidden(h)`, codec-token prefix `(C_i, BOS, R_i, EOS)`, layer-0 RVQ autoregression, MTP residual codebooks (`r = u_0(q⁰)+Σₖuₖ(qᵏ)`), Code2Wav; KV-cached incremental decoding **verified numerically equivalent** to the full forward; alternating Thinker/Talker optimisation (1:1 loss, paper LRs 1e-5/1e-4) with two-stage SFT driver.
 - **Full-duplex runtime** (`duplexomni/runtime/`) — non-blocking `[THINK]` requests, progressive fragment injection, `[WAIT]` aborts on barge-in, floor discipline (never talks over the user), shared-silence handling, RTF budget measured per slice.
 - **Evaluation** (`duplexomni/eval/`) — scripted behavioural benchmark (paper Sec. 5 methodology at the systems level) plus a none/weak/strong thinking-layer ablation.
+- **Full-duplex gateway** (`duplexomni/gateway/`, `web/`) — browser UI over WebSocket, 20 ms PCM, server-side floor control, barge-in that cancels speech and the in-flight task, pluggable ASR/TTS/VAD, SQLite task log, optional bearer token, optional OpenAI-compatible thinking model.
 
 ## Installation
 
@@ -108,12 +113,22 @@ python -m duplexomni train --config configs/tiny.json \
 # 4) behavioural benchmark + thinking-layer ablation (paper Sec. 5)
 python -m duplexomni bench --ablation
 
-# 5) websocket demo (minimal RFC 6455 server + simulated-mic client)
-python examples/websocket_demo.py --serve --port 8765 &
-python examples/websocket_demo.py --client --port 8765 --wav outputs/ws.wav
+# 5) full-duplex gateway: browser conversation, task delegation, backend tools
+python -m duplexomni serve
+# open http://127.0.0.1:8765
 ```
 
 Any JSONL/JSON/TXT chat corpus works for `build-data` — UltraChat / WildChat / BELLE / COIG / no-robots / OASST2 exports all fit (the corpora the paper uses). Without `--corpus`, a demo corpus is generated.
+
+## Full-duplex gateway
+
+`python -m duplexomni serve` (install with `pip install -e ".[serve]"`) binds `127.0.0.1:8765` and opens a browser UI:
+
+- the interaction layer answers immediately. The server streams PCM and holds the floor for the audio it has sent. A barge-in stops playback and the in-flight task;
+- ASR and TTS are replaceable engines. The default `scripted` engines do not decode speech and emit short, assertable PCM. Keyboard text uses the same final path. Swap in a model later with `DUPLEX_ASR` / `DUPLEX_TTS`;
+- delegated tasks are stored in SQLite (`DUPLEX_DB`, default `duplexomni.sqlite`) and can be read back when the client reconnects with the same session id.
+
+With no model configured, the worker only runs local tools: a restricted calculator, the clock, and session memory. There is no shell and no outbound network. Set `DUPLEX_TOKEN` to require that bearer token (or `token` query) on `/ws`; without it, only loopback peers are accepted. Point `DUPLEX_LLM_BASE_URL`, `DUPLEX_LLM_MODEL`, and `DUPLEX_LLM_API_KEY` at an OpenAI-compatible endpoint to enable the thinking model. Use headphones; quiet speaker echo is ignored while the server is playing.
 
 ## Evaluation
 

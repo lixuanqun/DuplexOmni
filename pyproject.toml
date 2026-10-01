@@ -5,22 +5,27 @@ build-backend = "hatchling.build"
 [project]
 name = "duplexomni"
 version = "0.1.0"
-description = "Engineering reference implementation of DuplexOmni (arXiv:2606.09186): full-duplex voice interaction with a decoupled interaction layer (480 ms time-sliced Thinker-Talker) and an async, pluggable thinking layer."
+description = "Full-duplex voice agent and DuplexOmni reference (arXiv:2606.09186): barge-in, streaming ASR/TTS, task delegation, and an async thinking layer. Runnable browser gateway, no GPU required."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "DuplexOmni contributors" }]
 keywords = [
     "full-duplex",
-    "speech-interaction",
-    "spoken-dialogue",
-    "speech-language-model",
+    "full-duplex-speech",
     "voice-agent",
     "voice-assistant",
-    "real-time",
-    "streaming-audio",
-    "multimodal",
+    "speech-interaction",
+    "spoken-dialogue",
+    "barge-in",
+    "turn-taking",
+    "streaming-asr",
+    "streaming-tts",
+    "realtime-voice",
+    "task-delegation",
+    "speech-language-model",
     "thinker-talker",
+    "websocket",
     "duplexomni",
     "arxiv",
 ]
@@ -40,7 +45,8 @@ dependencies = []
 
 [project.optional-dependencies]
 torch = ["torch>=2.1"]
-dev = ["pytest>=8.0", "ruff>=0.4"]
+dev = ["pytest>=8.0", "ruff>=0.4", "websockets>=13"]
+serve = ["websockets>=13"]
 
 [project.scripts]
 duplexomni = "duplexomni.cli:main"

@@ -29,3 +29,4 @@ outputs/
 checkpoints/
 *.wav
 !duplexomni/server/static/*.wav
+*.sqlite

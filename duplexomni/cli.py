@@ -95,12 +95,27 @@ def _cmd_demo(args) -> int:
 
 
 def _cmd_serve(args) -> int:
-    print(
-        "The websocket demo server lives in examples/websocket_demo.py "
-        "(python examples/websocket_demo.py --port 8765).",
-        file=sys.stderr,
-    )
-    return 2
+    from .gateway.config import GatewayConfig
+    from .gateway.server import serve_forever
+
+    overrides = {}
+    if args.host is not None:
+        overrides["host"] = args.host
+    if args.port is not None:
+        overrides["port"] = args.port
+    config = GatewayConfig.from_env(**overrides)
+    if args.llm_base_url:
+        config.llm_base_url = args.llm_base_url
+    if args.llm_model:
+        config.llm_model = args.llm_model
+    if args.llm_api_key:
+        config.llm_api_key = args.llm_api_key
+    if args.token is not None:
+        config.token = args.token
+    if args.db is not None:
+        config.db_path = args.db
+    print(f"duplex gateway http://{config.host}:{config.port}")
+    return serve_forever(config)
 
 
 def _cmd_bench(args) -> int:
@@ -159,8 +174,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=_cmd_bench)
 
-    p = sub.add_parser("serve", help="websocket demo server (see examples/)")
-    p.add_argument("--port", type=int, default=8765)
+    p = sub.add_parser("serve", help="full-duplex gateway: browser UI + websocket")
+    p.add_argument("--host", default=None, help="bind address (default 127.0.0.1)")
+    p.add_argument("--port", type=int, default=None, help="bind port (default 8765)")
+    p.add_argument("--llm-base-url", default=None, help="OpenAI-compatible base URL")
+    p.add_argument("--llm-model", default=None)
+    p.add_argument("--llm-api-key", default=None)
+    p.add_argument("--token", default=None, help="require this bearer token on /ws")
+    p.add_argument("--db", default=None, help="sqlite path for sessions and tasks")
     p.set_defaults(func=_cmd_serve)
 
     return parser

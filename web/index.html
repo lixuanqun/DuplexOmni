@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DuplexOmni 全双工</title>
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>DuplexOmni</h1>
+      <p class="sub">前端对话 · 任务委派 · 后端执行</p>
+    </div>
+    <div class="status" id="status">
+      <span id="conn">未连接</span>
+      <span id="floor">空闲</span>
+      <span id="think">思考空闲</span>
+    </div>
+  </header>
+  <main>
+    <section class="panel" aria-label="对话">
+      <h2>对话</h2>
+      <div id="log" class="log"></div>
+      <p id="draft" class="draft"></p>
+    </section>
+    <section class="panel" aria-label="任务">
+      <h2>委派任务</h2>
+      <ol id="tasks" class="tasks"></ol>
+    </section>
+  </main>
+  <footer>
+    <button id="mic" type="button">开始听</button>
+    <button id="cut" type="button">打断</button>
+    <form id="composer">
+      <input id="text" type="text" maxlength="4000" placeholder="输入一句话。麦克风用于打断" autocomplete="off" />
+      <button type="submit">发送</button>
+    </form>
+    <div class="meter" aria-hidden="true"><span id="level"></span></div>
+  </footer>
+  <p class="hint">播音由服务端下发。建议使用耳机。播放期间的轻声不会被当成打断；开口或点「打断」会停掉当前语音和进行中的任务。</p>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

@@ -21,7 +21,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -e ".[dev]"
+          pip install -e ".[dev,serve]"
       - name: Lint
         run: ruff check duplexomni tests examples
       - name: Test
@@ -37,7 +37,7 @@ jobs:
       - name: Install core only (no torch)
         run: |
           python -m pip install --upgrade pip
-          pip install pytest
+          pip install pytest websockets
           pip install -e . --no-deps
       - name: Core tests without torch
-        run: pytest tests/test_tokens.py tests/test_scenario.py tests/test_director.py tests/test_checks.py tests/test_slicer.py
+        run: pytest tests/test_tokens.py tests/test_scenario.py tests/test_director.py tests/test_checks.py tests/test_slicer.py tests/test_gateway_core.py tests/test_gateway_session.py tests/test_gateway_llm.py tests/test_gateway_server.py

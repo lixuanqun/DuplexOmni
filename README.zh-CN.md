@@ -2,7 +2,7 @@
 
 # DuplexOmni
 
-**全双工语音交互（交互层/思考层解耦架构）的工程化参考实现**
+**全双工语音助手：边听边说、随时打断、任务委派与异步思考，并带可运行的浏览器网关**
 
 [English](README.md) | 简体中文
 
@@ -14,6 +14,8 @@
 *论文
 ["DuplexOmni: Real-Time Listening, Seeing, Thinking, and Speaking for Full-Duplex Interaction"](https://arxiv.org/abs/2606.09186)
 （Huang 等，2026 —— 西安交通大学、北京大学、美团）的工程化参考实现。*
+
+**关键词：** 全双工语音、实时语音助手、语音智能体、语音交互、打断、话轮、流式语音识别、流式语音合成、口语对话、任务委派、工具调用、Thinker-Talker、WebSocket、双工对话
 
 </div>
 
@@ -27,6 +29,8 @@ DuplexOmni 是一个**全双工**口语对话架构：模型**同时**听、看�
 - **思考层（thinking layer）**——可插拔的 LLM/Agent，负责深度推理与工具调用；通过 `[THINK]` 非阻塞派发，结果以 `<...>` 片段流式回注，期间交互层照常听说。
 
 本仓库是对该方法的**忠实、经过充分测试、完全可运行**的工程化实现：控制 token 文法、Writer–Director 数据管线、带交替优化与 KV-cache 时间切片推理的 Thinker–Talker-MTP 模型、异步交互/思考运行时，以及行为级评测基准与思考层消融实验。
+
+也可以直接把它当成**语音助手**跑起来：`python -m duplexomni serve` 打开浏览器会话，边听边说，用户打断会停掉播音和进行中的任务，计算、时间和记事委派给后台执行，结果再送回对话。语音识别和合成是可替换的流式引擎。默认路径不需要 GPU，也不需要模型权重。
 
 **该架构在论文中取得的结果**（DuplexBench v1.5 ToR / 延迟）：
 
@@ -76,6 +80,7 @@ DuplexOmni 是一个**全双工**口语对话架构：模型**同时**听、看�
 - **Thinker–Talker-MTP 模型**（`duplexomni/model/`）——条件 token `c = f_text(e)+f_hidden(h)`、codec token 前缀 `(C_i, BOS, R_i, EOS)`、第 0 层 RVQ 自回归、MTP 残差码本（`r = u_0(q⁰)+Σₖuₖ(qᵏ)`）、Code2Wav；KV-cache 增量解码与全前向**数值等价**（有测试保证）；Thinker/Talker 交替优化（1:1 损失、论文学习率 1e-5/1e-4）+ 两阶段 SFT 驱动。
 - **全双工运行时**（`duplexomni/runtime/`）——非阻塞 `[THINK]` 请求、渐进片段注入、打断时 `[WAIT]` 中止、地板纪律（绝不抢用户的话）、共同沉默处理、逐片 RTF 预算。
 - **评测**（`duplexomni/eval/`）——脚本化行为基准（论文第 5 节方法学的系统级实现）+ none/weak/strong 思考层消融。
+- **全双工网关**（`duplexomni/gateway/`、`web/`）——浏览器界面走 WebSocket，20ms PCM，服务端话轮控制，打断会取消播音和进行中的任务，ASR/TTS/VAD 可替换，任务写入 SQLite，可选 Bearer 令牌，可选 OpenAI 兼容思考模型。
 
 ## 安装
 
@@ -108,12 +113,32 @@ python -m duplexomni train --config configs/tiny.json \
 # 4) 行为基准 + 思考层消融（论文第 5 节）
 python -m duplexomni bench --ablation
 
-# 5) WebSocket 演示（极简 RFC 6455 服务端 + 模拟麦克风客户端）
-python examples/websocket_demo.py --serve --port 8765 &
-python examples/websocket_demo.py --client --port 8765 --wav outputs/ws.wav
+# 5) 全双工网关：浏览器对话、任务委派、后端工具
+python -m duplexomni serve
+# 打开 http://127.0.0.1:8765
 ```
 
 `build-data` 支持任意 JSONL/JSON/TXT 聊天语料——UltraChat / WildChat / BELLE / COIG / no-robots / OASST2 的导出格式都可直接使用（即论文所用语料）。不传 `--corpus` 时会自动生成演示语料。
+
+## 全双工网关
+
+`python -m duplexomni serve` 把论文里的两层拆成可运行的服务，默认只监听 `127.0.0.1:8765`：
+
+- **交互层**立刻接话。服务端下发 PCM，话轮按已发送的音频保持；用户开口或点打断会停掉播音和进行中的任务。
+- **听和说**是可替换引擎，默认 `scripted`（不识音、用可断言的短 PCM）。键盘文本走同一条 final 路径。以后换模型只改 `DUPLEX_ASR` / `DUPLEX_TTS`。
+- **委派**把计算、时间、记忆这类请求做成任务，不堵住 20ms 音频环。任务状态写入 SQLite（`DUPLEX_DB`，默认 `duplexomni.sqlite`），重连续上同一会话号可以读回。
+- **执行层**跑受控工具，并把结果以片段送回交互层接着说。
+
+不配置模型时，后端只用本地工具（安全四则运算、当前时间、本会话记忆），没有 shell，也没有外网请求。`DUPLEX_TOKEN` 有值时，`/ws` 必须带同样的 Bearer 或 `token` 查询参数；不设置时只接受本机连接。要接上思考模型：
+
+```bash
+set DUPLEX_LLM_BASE_URL=http://127.0.0.1:8000/v1
+set DUPLEX_LLM_MODEL=your-model
+set DUPLEX_LLM_API_KEY=your-key
+python -m duplexomni serve
+```
+
+浏览器请用耳机。安装网关额外依赖：`pip install -e ".[serve]"`。
 
 ## 评测
 
