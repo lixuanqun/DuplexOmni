@@ -5,17 +5,24 @@ build-backend = "hatchling.build"
 [project]
 name = "duplexomni"
 version = "0.1.0"
-description = "Engineering reference implementation of DuplexOmni (arXiv:2606.09186): full-duplex speech interaction with decoupled interaction/thinking layers."
+description = "Engineering reference implementation of DuplexOmni (arXiv:2606.09186): full-duplex voice interaction with a decoupled interaction layer (480 ms time-sliced Thinker-Talker) and an async, pluggable thinking layer."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "DuplexOmni contributors" }]
 keywords = [
     "full-duplex",
-    "speech-language-model",
+    "speech-interaction",
     "spoken-dialogue",
+    "speech-language-model",
+    "voice-agent",
+    "voice-assistant",
     "real-time",
+    "streaming-audio",
     "multimodal",
+    "thinker-talker",
+    "duplexomni",
+    "arxiv",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

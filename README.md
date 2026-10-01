@@ -1,16 +1,49 @@
-# DuplexOmni (reference implementation)
+<div align="center">
+
+# DuplexOmni
+
+**Engineering reference implementation of full-duplex voice interaction with a decoupled interaction/thinking architecture**
+
+[English](README.md) | [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/lixuanqun/DuplexOmni/actions/workflows/ci.yml/badge.svg)](https://github.com/lixuanqun/DuplexOmni/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+[![Paper](https://img.shields.io/badge/paper-arXiv%3A2606.09186-b31b1b.svg)](https://arxiv.org/abs/2606.09186)
 
-An engineering reference implementation of **[DuplexOmni: Real-Time Listening,
-Seeing, Thinking, and Speaking for Full-Duplex Interaction](https://arxiv.org/abs/2606.09186)**
-(Huang et al., 2026) — a full-duplex spoken-dialogue architecture that decouples
-real-time interaction from deep reasoning:
+*Reference implementation of
+["DuplexOmni: Real-Time Listening, Seeing, Thinking, and Speaking for Full-Duplex Interaction"](https://arxiv.org/abs/2606.09186)
+(Huang et al., 2026 — Xi'an Jiaotong University, Peking University, Meituan).*
+
+</div>
+
+---
+
+## What is this?
+
+DuplexOmni is a full-duplex spoken-dialogue architecture: the model **listens, sees, thinks, and speaks at the same time**, instead of the classic half-duplex "user speaks → VAD → model responds" loop. The paper's key idea is to split the system into two asynchronously collaborating parts:
+
+- an **interaction layer** — an end-to-end streaming speech model (480 ms time-sliced Thinker–Talker) that keeps the conversation going in real time, and
+- a **thinking layer** — a pluggable LLM/agent that handles deep reasoning and tool use, dispatched non-blocking via `[THINK]` and streaming its result back as `<...>` fragments while the interaction layer keeps talking.
+
+This repository is a **faithful, tested, fully runnable engineering rendition** of that method: the control-token grammar, the Writer–Director data pipeline, the Thinker–Talker-MTP model with alternating optimisation and KV-cached time-sliced inference, the async interaction/thinking runtime, and a behavioural benchmark with the paper's thinking-layer ablation.
+
+**Paper results this architecture achieves** (DuplexBench v1.5 ToR / latency):
+
+| Model | ToR ↑ | Latency ↓ |
+|---|---|---|
+| **DuplexOmni (paper)** | **72.6%** | 0.506 s |
+| MiniCPM-o 4.5 | 36.3% | — |
+| Doubao | 27.8% | — |
+| Qwen3-Omni-Realtime-Flash | 25.2% | — |
+| Gemini-3.1-Flash-Live | 24.1% | — |
+
+> **Scope & honest limitations.** This repo ships the *method*, not the paper's 7B-scale weights. The bundled model is a tiny CPU-trainable configuration (`configs/tiny.json`, randomly initialised — demos exercise the full-duplex machinery, not language quality); `configs/paper_scale.json` documents the paper's hyperparameters. See [Limitations](#limitations) for details.
+
+## Architecture
 
 ```
-┌──────────────────────── interaction layer (streaming, < 1 RTF) ────────────────────────┐
+┌──────────────────────── interaction layer (streaming, RTF < 1) ────────────────────────┐
 │                                                                                         │
 │  user audio/video ──► ┌─────────┐  embeddings E_t   ┌─────────┐   layer-0 RVQ   ┌─────┐ │
 │  (480 ms slices)      │ Thinker │ ───────────────► │  Talker │ ──────────────► │ MTP │ │ │
@@ -25,36 +58,37 @@ real-time interaction from deep reasoning:
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The two layers collaborate through a small control-token grammar
-([paper Appendix A](docs/PAPER_ANALYSIS.md)):
+The two layers collaborate through a small control-token grammar (paper Appendix A):
 
 | Token | Meaning |
 |---|---|
-| `[THINK]` | trigger the thinking layer; keep speaking while it works (delayed reasoning) |
+| `[THINK]` | trigger the thinking layer; keep speaking while it works (**delayed reasoning**) |
 | `<...>` | one streamed fragment of the thinking result, injected progressively |
 | `ˆ` | overlap onset — user speech starts during assistant speech |
 | `[CUT]` | stop current speech; the rest of the turn becomes *ghost text* (kept in history, never spoken) |
 | `[WAIT]` | suspend/reset the pending reasoning request |
 | `[PENDnS]` | `n` seconds of shared silence |
 
-**Scope.** This repo is a faithful, tested, runnable *engineering* rendition of
-the paper's method — control-token grammar, Writer-Director data pipeline,
-Thinker-Talker-MTP model with alternating optimisation and KV-cached
-time-sliced inference, and the async interaction/thinking runtime. It does
-**not** ship the paper's 7B-scale weights: the bundled model is a tiny
-CPU-trainable configuration (`configs/tiny.json`); `configs/paper_scale.json`
-documents the paper's hyperparameters.
+## Features
 
-## Install
+- **Control-token grammar** (`duplexomni/tokens.py`) — incremental streaming parser; token-by-token streaming and batch parsing are semantically identical, with robust handling of malformed input.
+- **Writer–Director data pipeline** (`duplexomni/data/`) — chat corpora → scenario seeds (paper's pattern coverage: delayed reasoning 94.3%, shared silence 68.2%, assistant-initiated 50%, overlap 49.8%, interruption-with-reset 41.9%, backchannel 3.1%) → natural scripts → temporal control-token annotation → consistency checks → TTS → dual-track 480 ms slice records (JSONL). Rule-based backends run fully offline; LLM/TTS backends are pluggable.
+- **Thinker–Talker-MTP model** (`duplexomni/model/`) — conditioning `c = f_text(e)+f_hidden(h)`, codec-token prefix `(C_i, BOS, R_i, EOS)`, layer-0 RVQ autoregression, MTP residual codebooks (`r = u_0(q⁰)+Σₖuₖ(qᵏ)`), Code2Wav; KV-cached incremental decoding **verified numerically equivalent** to the full forward; alternating Thinker/Talker optimisation (1:1 loss, paper LRs 1e-5/1e-4) with two-stage SFT driver.
+- **Full-duplex runtime** (`duplexomni/runtime/`) — non-blocking `[THINK]` requests, progressive fragment injection, `[WAIT]` aborts on barge-in, floor discipline (never talks over the user), shared-silence handling, RTF budget measured per slice.
+- **Evaluation** (`duplexomni/eval/`) — scripted behavioural benchmark (paper Sec. 5 methodology at the systems level) plus a none/weak/strong thinking-layer ablation.
+
+## Installation
 
 ```bash
-pip install -e ".[torch,dev]"        # torch from PyPI, or:
+# with torch from PyPI
+pip install -e ".[torch,dev]"
+
+# or with CPU torch
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -e .
 ```
 
-The data pipeline and control-token grammar are **stdlib-only** (no torch
-needed); torch is required for `duplexomni.model` and the runtime demo.
+The data pipeline and control-token grammar are **stdlib-only** (no torch needed); torch is required for `duplexomni.model`, the runtime demo, and the benchmark.
 
 ## Quickstart
 
@@ -79,8 +113,39 @@ python examples/websocket_demo.py --serve --port 8765 &
 python examples/websocket_demo.py --client --port 8765 --wav outputs/ws.wav
 ```
 
-See `examples/` and `docs/PAPER_ANALYSIS.md` (Chinese) for a detailed paper
-walkthrough and the concept→code mapping.
+Any JSONL/JSON/TXT chat corpus works for `build-data` — UltraChat / WildChat / BELLE / COIG / no-robots / OASST2 exports all fit (the corpora the paper uses). Without `--corpus`, a demo corpus is generated.
+
+## Evaluation
+
+`duplexomni/eval/` mirrors the paper's evaluation *methodology* at the systems level (the bundled model is untrained, so language quality is out of scope — behaviour and timing are not):
+
+```text
+$ python -m duplexomni bench --ablation
+full-duplex behavioural benchmark
+================================================================
+[PASS] floor-discipline     cat=interruption       frag=0   max_rtf=0.05
+[PASS] turn-taking          cat=turn_taking        frag=0   max_rtf=0.03
+[PASS] thinking-delivery    cat=delayed_reasoning  frag=3   max_rtf=0.05
+[PASS] thinking-abort       cat=interruption_reset frag=0   max_rtf=0.04
+----------------------------------------------------------------
+interruption             100%
+turn_taking              100%
+delayed_reasoning        100%
+interruption_reset       100%
+OVERALL                  100%
+
+thinking-layer ablation (paper Sec. 5)
+================================================================
+variant      policy score   fragments   max_rtf
+none                100%           0      0.03
+weak                100%           1      0.25
+strong              100%           6      0.17
+----------------------------------------------------------------
+policy independent of thinking layer: True
+fragment volume scales with layer strength: True
+```
+
+The ablation reproduces the paper's systems-level finding: swapping the thinking layer (none / weak / strong) leaves the full-duplex *behavioural* score unchanged while delivered fragment volume scales with layer strength. Steady-state RTF stays far below the paper's RTF < 1 budget even on CPU.
 
 ## Repository layout
 
@@ -118,8 +183,11 @@ duplexomni/
 │   └── ablation.py        none/weak/strong thinking-layer ablation
 ├── demo.py              offline full-duplex simulation
 └── cli.py               `python -m duplexomni ...`
-tests/                   70 unit/integration tests (grammar, pipeline, model,
-                         caches, training, runtime, benchmark)
+configs/                 tiny.json (CPU-runnable) · paper_scale.json (paper hyperparams)
+examples/                build_dataset · train_tiny · offline_demo · run_benchmark ·
+                         websocket_demo (minimal RFC 6455 server + client)
+tests/                   70 unit/integration tests
+docs/PAPER_ANALYSIS.md   deep-dive paper walkthrough in Chinese
 ```
 
 ## Paper → code mapping
@@ -136,69 +204,30 @@ tests/                   70 unit/integration tests (grammar, pipeline, model,
 | scenario seeds (620K) → Writer → Director → checks → TTS → slicing | `data/*` |
 | non-blocking thinking request with dialogue/video/task context | `runtime/bridge.py`, `runtime/thinking.py` |
 | progressive fragment injection, halt on condition change | `runtime/bridge.py::take_pending/halt` |
-| RTF < 1 target | `runtime/metrics.py` |
-
-## Evaluation
-
-`duplexomni/eval/` mirrors the paper's evaluation *methodology* at the
-systems level (the bundled model is untrained, so language quality is out of
-scope — behaviour and timing are not):
-
-```text
-$ python -m duplexomni bench --ablation
-full-duplex behavioural benchmark
-================================================================
-[PASS] floor-discipline     cat=interruption       frag=0   max_rtf=0.11
-[PASS] turn-taking          cat=turn_taking        frag=0   max_rtf=0.07
-[PASS] thinking-delivery    cat=delayed_reasoning  frag=3   max_rtf=0.17
-[PASS] thinking-abort       cat=interruption_reset frag=0   max_rtf=0.20
-----------------------------------------------------------------
-interruption             100%
-turn_taking              100%
-delayed_reasoning        100%
-interruption_reset       100%
-OVERALL                  100%
-
-thinking-layer ablation (paper Sec. 5)
-================================================================
-variant      policy score   fragments   max_rtf
-none                100%           0      0.19
-weak                100%           1      0.19
-strong              100%           6      0.16
-----------------------------------------------------------------
-policy independent of thinking layer: True
-fragment volume scales with layer strength: True
-```
-
-The ablation reproduces the paper's systems-level finding: swapping the
-thinking layer (none / weak / strong) leaves the full-duplex *behavioural*
-score unchanged while delivered fragment volume scales with layer strength.
+| RTF < 1 target | `runtime/metrics.py`, `eval/harness.py` |
+| Full-DuplexBench-style evaluation, thinking-layer ablation | `eval/*` |
 
 ## Testing
 
 ```bash
-pytest            # 65 tests: grammar, pipeline, checks, slicer, model shapes,
-                    # KV-cache equivalence, alternating training, async bridge
+pytest                       # 70 tests: grammar, pipeline, checks, slicer, model
+                             # shapes, KV-cache equivalence, alternating training,
+                             # async bridge, runtime loop, benchmark, ablation
+ruff check duplexomni tests examples
 ```
 
-CI additionally runs the core (torch-free) tests on a bare interpreter and the
-full suite on Python 3.10–3.13 with CPU torch.
+CI runs the full suite on Python 3.10–3.13 with CPU torch, plus a torch-free core job that proves the data pipeline and grammar need no heavy dependencies.
 
-## Honest limitations
+## Limitations
 
-* No pretrained weights: the tiny model initialises randomly — demos exercise
-  the full-duplex machinery (timing, events, barge-in, async thinking), not
-  language quality. The paper's model is initialised from Qwen3-Omni and
-  trained on 3M conversations; that part needs the authors' released weights.
-* The mock codec/TTS are deterministic placeholders (Mimi/Qwen3-TTS plug in
-  behind `CodecBackend`/`TTSBackend`).
-* Runtime turn-taking policy (when to open/close an assistant turn, muting
-  after `[CUT]`) is implemented at the interaction layer as demo-grade policy,
-  not learned end-to-end as in the paper.
-* Video input is represented as token hooks (`video_tokens`, video summary in
-  the thinking context) but not encoded.
+* **No pretrained weights** — the tiny model initialises randomly; demos exercise the full-duplex machinery (timing, events, barge-in, async thinking), not language quality. The paper's model is initialised from Qwen3-Omni and trained on ~3M conversations; that part needs the authors' released weights.
+* **Mock codec/TTS** — deterministic placeholders; real Mimi / Qwen3-TTS plug in behind the `CodecBackend` / `TTSBackend` protocols.
+* **Demo-grade turn-taking policy** — when to open/close an assistant turn and muting after `[CUT]` are implemented as runtime policy, not learned end-to-end as in the paper.
+* **Video input** — represented as token hooks (`video_tokens`, video summary in the thinking context) but not encoded.
 
 ## Citation
+
+If you use this implementation, please cite the original paper:
 
 ```bibtex
 @article{huang2026duplexomni,
@@ -214,4 +243,4 @@ full suite on Python 3.10–3.13 with CPU torch.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE) — the implementation is independent of the paper's authors; for the paper's own weights/data releases, see the paper's repository.
