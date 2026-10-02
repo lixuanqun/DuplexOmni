@@ -36,6 +36,7 @@ class GatewayConfig:
     tts: str = "scripted"
     token: str = ""
     db_path: str = ":memory:"
+    tool_modules: str = ""
     llm_base_url: str = ""
     llm_model: str = ""
     llm_api_key: str = ""
@@ -50,6 +51,7 @@ class GatewayConfig:
             tts=os.environ.get("DUPLEX_TTS", "scripted"),
             token=os.environ.get("DUPLEX_TOKEN", ""),
             db_path=os.environ.get("DUPLEX_DB", "duplexomni.sqlite"),
+            tool_modules=os.environ.get("DUPLEX_TOOLS", ""),
             llm_base_url=os.environ.get("DUPLEX_LLM_BASE_URL", ""),
             llm_model=os.environ.get("DUPLEX_LLM_MODEL", ""),
             llm_api_key=os.environ.get("DUPLEX_LLM_API_KEY", ""),

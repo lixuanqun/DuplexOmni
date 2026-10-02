@@ -25,6 +25,12 @@ let playbackReady = null;
 let captureReady = false;
 let reconnect = 500;
 let sessionId = sessionStorage.getItem("duplex_session") || "";
+const pageToken = new URLSearchParams(location.search).get("token") || "";
+if (pageToken) {
+  const cleaned = new URL(location.href);
+  cleaned.searchParams.delete("token");
+  window.history.replaceState({}, "", cleaned.pathname + cleaned.search + cleaned.hash);
+}
 let acceptPcm = false;
 let announced = false;
 let micSource = null;
@@ -156,6 +162,10 @@ function handleMessage(raw) {
     }
     return;
   }
+  if (msg.type === "history") {
+    bubble(msg.role === "assistant" ? "assistant" : "user", msg.text || "");
+    return;
+  }
   if (msg.type === "transcript" && msg.role === "user") {
     if (msg.final === false) {
       draftEl.textContent = msg.text;
@@ -214,8 +224,6 @@ function handleMessage(raw) {
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const params = new URLSearchParams();
-  const page = new URLSearchParams(location.search);
-  if (page.get("token")) params.set("token", page.get("token"));
   if (sessionId) params.set("session_id", sessionId);
   const query = params.toString();
   const ws = new WebSocket(`${proto}://${location.host}/ws${query ? `?${query}` : ""}`);
@@ -224,6 +232,7 @@ function connect() {
   setStatus(connEl, "连接中");
   ws.onopen = () => {
     reconnect = 500;
+    if (pageToken) sendJson({ type: "auth", token: pageToken });
   };
   ws.onmessage = (ev) => {
     if (typeof ev.data === "string") handleMessage(ev.data);

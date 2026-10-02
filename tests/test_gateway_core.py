@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from duplexomni.gateway.aec import EchoCanceller
 from duplexomni.gateway.engines.tts import decode_scripted, scripted_frames
 from duplexomni.gateway.floor import Floor, FloorController
 from duplexomni.gateway.protocol import ProtocolError, decode_audio, encode_audio
@@ -82,10 +83,40 @@ def test_playback_end_does_not_clip_audio_already_sent():
     assert floor.tick(now=1.2)[0].data["floor"] == "idle"
 
 
+def test_echo_canceller_removes_repeated_far_end_and_keeps_new_speech():
+    import array
+
+    echo = array.array("h", [6000] * 160).tobytes()
+    speech = array.array("h", [14000] * 160).tobytes()
+    canceller = EchoCanceller()
+    for _ in range(12):
+        canceller.push_far(echo)
+        canceller.cancel(echo)
+    assert rms(canceller.cancel(echo)) < 0.05
+    assert rms(canceller.cancel(speech)) > 0.15
+
+
 def test_scripted_tone_is_audible_and_marked():
     frame = scripted_frames("好")[0]
     assert decode_scripted(frame) == (0, ord("好"))
     assert rms(frame) > 0.08
+
+
+def test_contrib_loader_accepts_ping_and_refuses_a_path():
+    import asyncio
+
+    from duplexomni.gateway.tools import Memory, ToolContext, default_registry, load_contrib
+
+    registry = default_registry()
+    load_contrib(registry, "ping")
+    assert registry.known("ping")
+
+    async def call() -> str:
+        return await registry.call("ping", {}, ToolContext("hi", Memory()))
+
+    assert asyncio.run(call()) == "pong"
+    with pytest.raises(ValueError):
+        load_contrib(registry, "../os")
 
 
 def test_audio_frame_roundtrip():

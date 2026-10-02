@@ -20,7 +20,7 @@ FLAG_SPEECH = 0x01
 FLAG_PLAYBACK = 0x02
 
 JSON_TYPES = frozenset({
-    "hello", "text", "transcript", "barge", "cancel", "ping", "bye", "playback",
+    "hello", "text", "transcript", "barge", "cancel", "ping", "bye", "playback", "auth",
 })
 
 

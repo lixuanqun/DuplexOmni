@@ -50,8 +50,19 @@ def test_wrong_token_is_rejected():
         async with open_gateway(config) as server:
             port = server.sockets[0].getsockname()[1]
             with pytest.raises(websockets.exceptions.InvalidStatus):
-                async with websockets.connect(f"ws://127.0.0.1:{port}/ws?token=nope"):
+                async with websockets.connect(
+                    f"ws://127.0.0.1:{port}/ws",
+                    additional_headers={"Authorization": "Bearer nope"},
+                ):
                     pass
+            async with websockets.connect(f"ws://127.0.0.1:{port}/ws?token=secret") as leaked:
+                await leaked.send(json.dumps({"type": "auth", "token": "nope"}))
+                with pytest.raises(websockets.exceptions.ConnectionClosed):
+                    await asyncio.wait_for(leaked.recv(), 2)
+            async with websockets.connect(f"ws://127.0.0.1:{port}/ws") as ws:
+                await ws.send(json.dumps({"type": "auth", "token": "secret"}))
+                hello = json.loads(await asyncio.wait_for(ws.recv(), 2))
+                assert hello["type"] == "hello"
             async with websockets.connect(
                 f"ws://127.0.0.1:{port}/ws",
                 additional_headers={"Authorization": "Bearer secret"},

@@ -13,6 +13,7 @@ import time
 import uuid
 from collections.abc import Callable
 
+from .aec import EchoCanceller
 from .config import GatewayConfig
 from .dialogue import estimate_hold_s, fast_ack
 from .engines import build_asr, build_tts, build_vad
@@ -21,7 +22,7 @@ from .metrics import METERS
 from .protocol import encode_audio
 from .router import route_utterance
 from .store import SessionStore
-from .tools import Memory, ToolRegistry, default_registry
+from .tools import Memory, ToolRegistry, default_registry, load_contrib
 from .vad import rms
 from .worker import TaskSpec, execute_task
 
@@ -47,6 +48,7 @@ class DuplexSession:
         self.config = config or GatewayConfig()
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.floor = FloorController()
+        self.aec = EchoCanceller()
         self.vad = vad or build_vad(self.config.vad, frame_ms=self.config.frame_ms)
         self.asr = asr or build_asr(self.config.asr)
         self.tts = tts or build_tts(
@@ -55,7 +57,11 @@ class DuplexSession:
             frame_ms=self.config.frame_ms,
         )
         self.store = store
-        self.tools = tools or default_registry()
+        if tools is None:
+            tools = default_registry()
+            if self.config.tool_modules:
+                load_contrib(tools, self.config.tool_modules)
+        self.tools = tools
         self.planner = planner
         self.llm = llm
         self.memory = Memory()
@@ -82,6 +88,9 @@ class DuplexSession:
         self._last_text_at = 0.0
         self._last_rx = time.monotonic()
         self._asked_at: dict[int, float] = {}
+        self._turn_origin: dict[int, float] = {}
+        self._audio_marked: set[int] = set()
+        self._task_origin: dict[str, float] = {}
 
     def hello_message(self) -> dict:
         return {
@@ -101,6 +110,8 @@ class DuplexSession:
         """Re-send stored tasks after a client reconnects with the same id."""
         if self.store is None:
             return
+        for turn in self.store.list_turns(self.session_id):
+            self.emit({"type": "history", "role": turn["role"], "text": turn["text"]})
         for task in self.store.list_tasks(self.session_id):
             payload = {
                 "type": "task",
@@ -145,6 +156,7 @@ class DuplexSession:
             METERS.inc("outbound_dropped")
 
     def emit_pcm(self, pcm: bytes) -> None:
+        self.aec.push_far(pcm)
         self._pcm_index = (self._pcm_index + 1) & 0xFFFFFFFF
         frame = (self.pcm_epoch, encode_audio(self._pcm_index, pcm))
         try:
@@ -196,6 +208,8 @@ class DuplexSession:
             self._apply_all(
                 self.floor.note_playback(message.get("state") == "start", now=time.monotonic())
             )
+        elif kind == "auth":
+            return
         elif kind == "ping":
             self.emit({"type": "pong", "t": message.get("t")})
         elif kind in {"hello", "bye"}:
@@ -221,17 +235,18 @@ class DuplexSession:
 
     def handle_frame(self, index: int, pcm: bytes, speech_hint: bool, playback: bool) -> None:
         del index
-        level = rms(pcm)
         now = time.monotonic()
         server_play = self._tts_live() or self.floor.server_playing(now)
+        mic = self.aec.cancel(pcm) if (server_play or playback) else pcm
+        level = rms(mic)
         echo = (server_play or playback) and level < self.config.echo_rms
         if echo:
-            self.vad.update(b"\x00" * max(len(pcm), 2))
+            self.vad.update(b"\x00" * max(len(mic), 2))
             speaking = False
             heard = b""
         else:
-            speaking = self.vad.update(pcm) or (speech_hint and level >= self.config.hint_rms)
-            heard = pcm
+            speaking = self.vad.update(mic) or (speech_hint and level >= self.config.hint_rms)
+            heard = mic
         if speaking and self.floor.floor == Floor.ASSISTANT:
             METERS.inc("barge_ins")
             self._invalidate("barge-in")
@@ -330,7 +345,11 @@ class DuplexSession:
         self._invalidate("new-utterance")
         generation = self._generation
         self._asked_at[generation] = now
+        self._turn_origin[generation] = now
+        self._trim_clocks(generation)
         self.emit({"type": "transcript", "role": "user", "text": text, "final": True})
+        if self.store is not None:
+            self.store.append_turn(self.session_id, "user", text)
         self._reply_task = self._spawn(self._reply(text, generation))
 
     def _spawn(self, coro) -> asyncio.Task:
@@ -393,6 +412,7 @@ class DuplexSession:
                     if self.floor.floor != Floor.ASSISTANT:
                         return
                     self.emit_pcm(pcm)
+                    self._mark_first_audio(generation)
                     self.floor.note_sent_frame(now=time.monotonic(), frame_s=frame_s)
                     await asyncio.sleep(0)
         except asyncio.CancelledError:
@@ -430,6 +450,7 @@ class DuplexSession:
         if generation != self._generation or self._closed:
             return
         task_id = uuid.uuid4().hex[:12]
+        self._task_origin[task_id] = time.monotonic()
         self._pending_goal = goal
         self._apply_all(self.floor.start_thinking(task_id))
         spec = TaskSpec(task_id=task_id, goal=goal, session_id=self.session_id)
@@ -509,6 +530,8 @@ class DuplexSession:
             detail=str(event.get("detail") or ""),
             goal=str(event.get("goal") or ""),
         )
+        if status in {"done", "failed", "cancelled"}:
+            self._mark_task(task_id)
         if status in {"done", "failed"}:
             self._apply_all(self.floor.finish_thinking(task_id))
 
@@ -538,6 +561,8 @@ class DuplexSession:
                 "turn_id": data["turn_id"],
                 "hold_s": round(float(data.get("hold_s", 0.0)), 3),
             })
+            if self.store is not None:
+                self.store.append_turn(self.session_id, "assistant", str(data["text"]))
             self._enqueue_speech(str(data["text"]), int(data["turn_id"]))
         elif name == "defer_speech":
             self._deferred.append(data["text"])
@@ -552,6 +577,7 @@ class DuplexSession:
             reason = str(data.get("reason") or "")
             status = "interrupted" if reason == "session-end" else "cancelled"
             if task_id:
+                self._mark_task(str(task_id))
                 self._save_task(str(task_id), status=status, detail=reason)
             self.emit({
                 "type": "task",
@@ -572,6 +598,27 @@ class DuplexSession:
             self.emit({"type": "floor", "floor": data.get("floor"), "turn_id": data.get("turn_id")})
         elif name == "task_idle":
             return
+
+    def _trim_clocks(self, generation: int) -> None:
+        for key in [item for item in self._turn_origin if item < generation]:
+            self._turn_origin.pop(key, None)
+            self._asked_at.pop(key, None)
+            self._audio_marked.discard(key)
+
+    def _mark_first_audio(self, generation: int) -> None:
+        if generation in self._audio_marked:
+            return
+        started = self._turn_origin.get(generation)
+        if started is None:
+            return
+        self._audio_marked.add(generation)
+        METERS.observe("first_audio_ms", (time.monotonic() - started) * 1000)
+
+    def _mark_task(self, task_id: str) -> None:
+        started = self._task_origin.pop(task_id, None)
+        if started is None:
+            return
+        METERS.observe("task_ms", (time.monotonic() - started) * 1000)
 
     def _save_task(
         self,

@@ -8,6 +8,7 @@ them; do not widen the defaults into arbitrary code execution.
 from __future__ import annotations
 
 import ast
+import importlib
 import operator
 import re
 from collections.abc import Awaitable, Callable
@@ -26,6 +27,7 @@ _OPS = {
 }
 
 _EXPR_CHARS = re.compile(r"[0-9.+\-*/%()\s×÷（）]+")
+_MODULE_NAME = re.compile(r"[a-z][a-z0-9_]{0,40}")
 
 
 class ToolError(Exception):
@@ -187,6 +189,24 @@ def rule_plan(goal: str) -> list[tuple[str, dict[str, Any]]]:
     if not steps:
         steps.append(("reason", {"goal": goal}))
     return steps
+
+
+def load_contrib(registry: ToolRegistry, names: str) -> None:
+    """Load ``duplexomni.gateway.contrib.<name>`` modules that expose ``register``.
+
+    Names come from configuration. A path, a dot, or an unknown package is refused.
+    """
+    for name in names.split(","):
+        module_name = name.strip()
+        if not module_name:
+            continue
+        if _MODULE_NAME.fullmatch(module_name) is None:
+            raise ValueError(f"拒绝加载工具模块：{module_name}")
+        module = importlib.import_module(f"duplexomni.gateway.contrib.{module_name}")
+        register = getattr(module, "register", None)
+        if not callable(register):
+            raise ValueError(f"工具模块没有 register：{module_name}")
+        register(registry)
 
 
 def default_registry() -> ToolRegistry:

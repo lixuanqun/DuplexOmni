@@ -36,9 +36,31 @@ class SessionStore:
                     detail TEXT NOT NULL DEFAULT '',
                     updated_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS turns (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                );
                 """
             )
+            self._fail_orphans()
             self._conn.commit()
+
+    def _fail_orphans(self) -> None:
+        """A new process cannot resume a task that was running in the last one."""
+        now = time.time()
+        self._conn.execute(
+            """
+            UPDATE tasks
+            SET status = 'failed',
+                detail = '进程重启，任务未完成',
+                updated_at = ?
+            WHERE status IN ('running', 'queued', 'tool')
+            """,
+            (now,),
+        )
 
     def ensure_session(self, session_id: str) -> None:
         now = time.time()
@@ -91,6 +113,31 @@ class SessionStore:
                 (task_id, session_id, status, goal, tool, summary, detail, now),
             )
             self._conn.commit()
+
+    def append_turn(self, session_id: str, role: str, text: str) -> None:
+        cleaned = " ".join(text.split())
+        if not cleaned:
+            return
+        now = time.time()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO turns(session_id, role, text, created_at) VALUES(?, ?, ?, ?)",
+                (session_id, role, cleaned[:4000], now),
+            )
+            self._conn.commit()
+
+    def list_turns(self, session_id: str, *, limit: int = 200) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT role, text FROM turns
+                WHERE session_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (session_id, limit),
+            ).fetchall()
+        return [{"role": row["role"], "text": row["text"]} for row in reversed(rows)]
 
     def list_tasks(self, session_id: str) -> list[dict]:
         with self._lock:

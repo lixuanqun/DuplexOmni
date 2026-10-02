@@ -8,6 +8,7 @@ socket instead of queueing work without a bound.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import http
 import json
 import logging
@@ -96,19 +97,18 @@ def _response(status: int, body: bytes, content_type: str) -> Response:
 def credentials_ok(config: GatewayConfig, peer: str, supplied: str) -> bool:
     """A configured token must match. With no token, only loopback peers connect."""
     if config.token:
-        return supplied == config.token
+        return bool(supplied) and hmac.compare_digest(supplied, config.token)
     return peer in _LOOPBACK
 
 
-def _supplied_token(request) -> str:
+def _bearer_token(request) -> str:
+    """Read the bearer token from the header. The query string is never a credential."""
+    if request is None:
+        return ""
     header = request.headers.get("Authorization") or request.headers.get("authorization") or ""
     if header.lower().startswith("bearer "):
-        bearer = header[7:].strip()
-        if bearer:
-            return bearer
-    query = parse_qs(urlsplit(request.path).query)
-    values = query.get("token") or []
-    return values[0] if values else ""
+        return header[7:].strip()
+    return ""
 
 
 def _peer(connection) -> str:
@@ -145,6 +145,30 @@ def _http(request) -> Response | None:
     if not file_path.is_file():
         return _response(404, b"ui not built", "text/plain; charset=utf-8")
     return _response(200, file_path.read_bytes(), spec[1])
+
+
+async def _read_auth(ws, token: str) -> bool:
+    """Browser sockets cannot set Authorization. The first control frame carries the token."""
+    try:
+        raw = await asyncio.wait_for(ws.recv(), 5)
+    except TimeoutError:
+        await ws.close(1008, "auth timeout")
+        return False
+    if not isinstance(raw, str):
+        await ws.close(1008, "unauthorized")
+        return False
+    try:
+        message = decode_json(raw)
+    except ProtocolError:
+        await ws.close(1008, "unauthorized")
+        return False
+    supplied = message.get("token") if message.get("type") == "auth" else ""
+    if isinstance(supplied, str) and credentials_ok(
+        GatewayConfig(token=token), "127.0.0.1", supplied
+    ):
+        return True
+    await ws.close(1008, "unauthorized")
+    return False
 
 
 async def _send_loop(ws, session: DuplexSession) -> None:
@@ -192,6 +216,10 @@ async def _handle(
         METERS.inc("rejected_sessions")
         return
     request = getattr(ws, "request", None)
+    if config.token and not credentials_ok(config, peer, _bearer_token(request)):
+        if not await _read_auth(ws, config.token):
+            gate.release(peer)
+            return
     session_id = _session_id_from(request) if request is not None else None
     session = DuplexSession(config, llm=llm, session_id=session_id, store=store)
     store.ensure_session(session.session_id)
@@ -251,10 +279,15 @@ def open_gateway(config: GatewayConfig):
 
     def process_request(connection, request):
         path = request.path.split("?", 1)[0]
-        if path == "/ws" and not credentials_ok(config, _peer(connection), _supplied_token(request)):
-            METERS.inc("rejected_sessions")
-            return _response(401, b"unauthorized", "text/plain; charset=utf-8")
         if path == "/ws":
+            peer = _peer(connection)
+            if not config.token and peer not in _LOOPBACK:
+                METERS.inc("rejected_sessions")
+                return _response(401, b"unauthorized", "text/plain; charset=utf-8")
+            bearer = _bearer_token(request)
+            if config.token and bearer and not credentials_ok(config, peer, bearer):
+                METERS.inc("rejected_sessions")
+                return _response(401, b"unauthorized", "text/plain; charset=utf-8")
             return None
         return _http(request)
 
